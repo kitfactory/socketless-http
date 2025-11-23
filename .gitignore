@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+uv.lock
+.python-version
+.mypy_cache/
