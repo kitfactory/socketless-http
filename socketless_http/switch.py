@@ -124,6 +124,7 @@ def switch_to_ipc_connection(
     base_url: str = "http://testserver",
     startup_timeout: float = 5.0,
     app_kind: str = "auto",
+    debug: bool = False,
 ) -> Callable[[], None]:
     """Switch httpx/TestClient to IPC transports. Returns cleanup function."""
     global _active_session
@@ -136,6 +137,7 @@ def switch_to_ipc_connection(
         startup_timeout=startup_timeout,
         reset_hook_path=reset_hook_path,
         app_kind=app_kind,
+        debug=debug,
     )
 
     reset_callable = None

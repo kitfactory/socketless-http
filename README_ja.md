@@ -163,6 +163,9 @@ ipc_connection = ipc_connection_fixture(
     reset_hook="tests.sample_app:reset_state",
 )
 reset_between_tests = reset_between_tests_fixture()
+
+## 🔍 デバッグログを有効化する
+ハング箇所の切り分けやリクエストのトレースが必要な場合は、`switch_to_ipc_connection(..., debug=True)` を渡してください。ワーカー起動/handshake 成否、親側で送信したメソッド・URL・ヘッダ数、ワーカー側で受信した内容とレスポンスのステータス、reset_hook 呼び出し、再起動試行と stderr を stderr にまとめて出力します。
 ```
 
 ## 現状の対応範囲（MVP）
@@ -183,5 +186,6 @@ reset_between_tests = reset_between_tests_fixture()
 - レスポンスはバッファリング前提（ストリーミングなし）で、リクエスト/レスポンスとも 5MB 上限です。
 - ワーカーは 1 プロセスを使い回し、死亡時の自動リスタートは 1 回だけ試行します。
 - HTTP/2 や TLS オプションは対象外で、HTTP/1.1 相当のリクエストを想定します。
+- FastAPI アプリを ASGITransport で in-process 実行する場合、エンドポイントは `async def` で定義し、同期処理は `anyio.to_thread.run_sync` などで明示的にスレッドへオフロードすることを推奨します（FastAPI/Starlette/httpx/anyio の一部組み合わせで `def` ルートがハングする既知の挙動があります）。
 
 詳細設計は `docs/spec.md` を参照してください。英語版は README.md にあります。

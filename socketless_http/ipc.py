@@ -56,11 +56,13 @@ class IpcProcess:
         startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
         reset_hook_path: str | None = None,
         app_kind: str = "auto",
+        debug: bool = False,
     ):
         self.app_import = app_import
         self.startup_timeout = startup_timeout
         self.reset_hook_path = reset_hook_path
         self.app_kind = app_kind
+        self.debug = debug
         self._stderr_buffer: deque[str] = deque(maxlen=50)
         self._stderr_stop = threading.Event()
         self._stderr_thread: threading.Thread | None = None
@@ -71,12 +73,21 @@ class IpcProcess:
         self._stdin_lock = threading.Lock()
         self._handshake()
 
+    def _log(self, message: str) -> None:
+        if not self.debug:
+            return
+        sys.stderr.write(f"[socketless-http] {message}\n")
+        sys.stderr.flush()
+
     def _start_process(self) -> subprocess.Popen:
         cmd = [sys.executable, "-m", "socketless_http.worker", "--app", self.app_import]
         if self.reset_hook_path:
             cmd.extend(["--reset-hook", self.reset_hook_path])
         if self.app_kind:
             cmd.extend(["--app-kind", self.app_kind])
+        if self.debug:
+            cmd.append("--debug")
+            self._log(f"starting worker: cmd={' '.join(cmd)}")
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -116,20 +127,25 @@ class IpcProcess:
             if self._proc.stdout is None:
                 raise RuntimeError("worker stdout not available")
             if time.monotonic() - start > self.startup_timeout:
+                self._log("handshake timed out")
                 raise TimeoutError("worker handshake timed out")
             line = self._proc.stdout.readline()
             if line:
                 break
             if self._proc.poll() is not None:
+                self._log("worker exited during handshake")
                 raise RuntimeError(f"worker exited during handshake. stderr:\n{self._stderr_tail()}")
         try:
             msg = json.loads(line)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"invalid handshake: {line!r}") from exc
         if not isinstance(msg, dict) or msg.get("type") != "handshake" or msg.get("status") != "ok":
+            self._log(f"handshake failed with payload: {msg!r}")
             raise RuntimeError(f"handshake failed: {msg!r}\nstderr:\n{self._stderr_tail()}")
+        self._log(f"handshake ok (pid={self._proc.pid}, elapsed={time.monotonic() - start:.3f}s)")
 
     def close(self) -> None:
+        self._log("closing worker")
         if self._proc.poll() is None:
             self._proc.terminate()
             try:
@@ -158,11 +174,20 @@ class IpcProcess:
         return IpcResponse(status=data.get("status", 0), headers=headers, body=body, error=err)
 
     def _send_raw(self, message: dict) -> dict:
+        msg_debug = ""
+        if self.debug:
+            m = message.get("method")
+            url = message.get("url")
+            msg_debug = f"{m} {url}" if m and url else "control"
+            headers = message.get("headers") or []
+            body_b64 = message.get("body")
+            body_len = len(base64.b64decode(body_b64)) if body_b64 else 0
+            self._log(f"-> send {msg_debug} headers={len(headers)} body_len={body_len}")
         payload = json.dumps(message, separators=(",", ":"))
         if self._proc.stdin is None or self._proc.stdout is None:
             raise RuntimeError("worker pipes unavailable")
         if self._proc.poll() is not None:
-            self._ensure_running()
+            self._ensure_running(reason="process exited before send")
 
         with self._stdin_lock:
             self._proc.stdin.write(payload + "\n")
@@ -171,7 +196,7 @@ class IpcProcess:
         with self._stdout_lock:
             line = self._proc.stdout.readline()
             if not line and self._proc.poll() is not None:
-                self._ensure_running()
+                self._ensure_running(reason="process exited during read")
                 line = self._proc.stdout.readline()
                 if not line:
                     raise RuntimeError("worker process exited unexpectedly")
@@ -180,25 +205,34 @@ class IpcProcess:
             data = json.loads(line)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"invalid response: {line!r}") from exc
+        if self.debug:
+            status = data.get("status")
+            err = data.get("error")
+            self._log(f"<- recv {msg_debug} status={status} error={err}")
         return data
 
     def reset(self) -> None:
         """Send reset request to worker if supported."""
+        self._log("sending reset request")
         data = self._send_raw({"type": "reset"})
         if data.get("type") != "reset" or data.get("status") not in {"ok", "noop"}:
             raise RuntimeError(f"reset failed: {data}")
+        self._log(f"reset result: {data.get('status')}")
 
-    def _ensure_running(self) -> None:
+    def _ensure_running(self, *, reason: str | None = None) -> None:
         if self._proc.poll() is None:
             return
+        tail = self._stderr_tail()
+        self._log(f"worker exited (reason={reason or 'unknown'}, code={self._proc.returncode}); stderr tail:\n{tail}")
         if not self._restart_attempted:
             self._restart_attempted = True
             self._stop_stderr_reader()
             self._proc = self._start_process()
             self._start_stderr_reader()
             self._handshake()
+            self._log("worker restarted successfully")
             return
-        raise RuntimeError(f"worker process not running; stderr:\n{self._stderr_tail()}")
+        raise RuntimeError(f"worker process not running; stderr:\n{tail}")
 
 
 class IpcTransport(httpx.BaseTransport):

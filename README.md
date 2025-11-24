@@ -165,6 +165,9 @@ ipc_connection = ipc_connection_fixture(
     reset_hook="tests.sample_app:reset_state",
 )
 reset_between_tests = reset_between_tests_fixture()
+
+## 🔍 Enable debug logging
+Pass `switch_to_ipc_connection(..., debug=True)` when you need to trace what the worker is doing. It prints to stderr: worker startup/handshake status, method/URL/headers count sent from the parent, what the worker received and the returned status/body length, reset_hook calls, and restart attempts with stderr from the worker.
 ```
 
 ## What’s supported (MVP)
@@ -185,5 +188,6 @@ reset_between_tests = reset_between_tests_fixture()
 - Responses are buffered (no streaming); 5MB body limit per request/response.
 - One worker process is reused; only one auto-restart attempt is made if it dies.
 - TLS and HTTP/2 semantics are out of scope; keep to HTTP/1.1-style requests.
+- FastAPI apps run in-process via ASGITransport: define routes as `async def` and offload blocking work with `anyio.to_thread.run_sync` to avoid known hangs in some FastAPI/Starlette/httpx/anyio versions when using sync (`def`) endpoints.
 
 See `docs/spec.md` for full design notes. README_ja.md provides the same info in Japanese.

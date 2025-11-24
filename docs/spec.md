@@ -13,7 +13,7 @@
 - 依存は最小限（標準ライブラリ中心）。pytest などは dev 依存に限定。
 
 ## 提供 API（ドラフト）
-- `switch_to_ipc_connection(app_import: str | ASGIApp, *, serializer="json", startup_timeout=5.0, env: dict | None = None) -> Callable[[], None]`
+- `switch_to_ipc_connection(app_import: str | ASGIApp, *, serializer="json", startup_timeout=5.0, env: dict | None = None, debug: bool = False) -> Callable[[], None]`
   - 指定のアプリをサブプロセスで起動し、`httpx.Client/AsyncClient` と `fastapi.testclient.TestClient` を IPC トランスポートに monkeypatch。戻り値でクリーンアップ関数を返す。
 - `ipc_httpx_client()` / `ipc_async_client()`（context manager）
   - `httpx` 互換のクライアントを IPC 経由で提供。monkeypatch を使いたくない場合の明示的 API。
@@ -33,7 +33,7 @@
 - **互換インターフェース**: FastAPI の `TestClient` 生成時に同トランスポートを差し込むラッパーを提供し、既存テストの API 形を維持。
 - **ハンドシェイク**: サブプロセス起動時にプロトコルバージョンとアプリ import 成否を通知。クライアント側は `startup_timeout` で待機。
 - **エラーハンドリング**: サブプロセスが異常終了した場合は `RuntimeError` を上げ、stderr を含むデバッグ情報を返す。
-- **ログ出力**: サブプロセス stderr は通常非表示とし、エラー発生時のみバッファをテスト出力へ添付（ノイズ削減）。
+- **ログ出力**: サブプロセス stderr は通常非表示とし、エラー発生時のみバッファをテスト出力へ添付（ノイズ削減）。`debug=True` の場合は起動/handshake、送受信のメソッド・URL・ヘッダ数/ボディ長、reset_hook 呼び出し、再起動試行と stderr tail を親/子プロセスの stderr に詳細出力。
 
 ### プロセス管理・ライフサイクル（推奨）
 - 起動時に ASGI lifespan を一度だけ実行し、テストセッション中はサブプロセスを使い回す（module/session fixture で管理）。
@@ -59,6 +59,7 @@
 - WebSocket, SSE, HTTP/2, ストリーミングレスポンス
 - Chunked エンコーディング
 - Keep-alive を跨いだコネクション共有（IPC 上では都度独立処理）
+- FastAPI/ASGI を in-process で ASGITransport 越しに実行する場合、ルートは `async def` で定義し、同期処理は `anyio.to_thread.run_sync` などで明示的にスレッドに逃がすことを推奨する。FastAPI/Starlette/httpx/anyio の一部組み合わせでは `def` ルートが ASGI レスポンスを送らずハングする既知の挙動があるため。
 
 ## プロトコルスケッチ（JSON over stdio）
 ```json
